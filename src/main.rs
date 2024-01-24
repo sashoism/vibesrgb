@@ -29,15 +29,15 @@ trait Scalable<T> {
 }
 
 impl Scalable<f32> for Range<usize> {
-    fn scale(&self, other: f32) -> Self {
-        ((self.start as f32 * other).trunc() as usize)..((self.end as f32 * other).trunc() as usize)
+    fn scale(&self, scalar: f32) -> Self {
+        ((self.start as f32 * scalar).trunc() as usize)..((self.end as f32 * scalar).trunc() as usize)
     }
 }
 
 enum Binning {
     Linear(usize),
     Logarithmic(usize),
-    Custom(Vec<Range<usize>>),
+    Ranges(Vec<Range<usize>>),
 }
 
 impl Binning {
@@ -66,7 +66,7 @@ impl Binning {
                 })
                 .collect(),
 
-            Binning::Custom(ranges) => ranges
+            Binning::Ranges(ranges) => ranges
                 .iter()
                 .map(|range| {
                     let scaled_range = range.scale(scale);
@@ -110,7 +110,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // let binning = Binning::Linear(12);
     let binning = Binning::Logarithmic(2);
-    // let binning = Binning::Custom(vec![
+    // let binning = Binning::Ranges(vec![
     //     0..50,
     //     50..100,
     //     100..1000,
