@@ -1,7 +1,11 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use openrgb::{data::Color, OpenRGB};
 use rustfft::{num_complex::Complex, FftPlanner};
+use serde_json::Value;
 use std::error::Error;
+use std::io::BufReader;
 use std::ops::Range;
+use std::sync::{Arc, Mutex};
 
 fn average(slice: &[f32]) -> f32 {
     let sum: f32 = slice.iter().sum();
@@ -30,7 +34,8 @@ trait Scalable<T> {
 
 impl Scalable<f32> for Range<usize> {
     fn scale(&self, scalar: f32) -> Self {
-        ((self.start as f32 * scalar).trunc() as usize)..((self.end as f32 * scalar).trunc() as usize)
+        ((self.start as f32 * scalar).trunc() as usize)
+            ..((self.end as f32 * scalar).trunc() as usize)
     }
 }
 
@@ -95,7 +100,54 @@ impl Binning {
     }
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
+fn paint(
+    leds: &Vec<Option<(f32, f32)>>,
+    bins: &Vec<(Range<usize>, f32)>,
+    sample_rate: f32,
+) -> Vec<Color> {
+    leds.iter()
+        .map(|led| match led {
+            Some((x, y)) => {
+                let bin = bins
+                    .iter()
+                    .find(|(range, _)| range.contains(&((*x * sample_rate / 2.0) as usize)))
+                    .unwrap();
+                if bin.1 > 1.0 {
+                    Color::new(255, 0, 0)
+                } else {
+                    Color::new(0, 0, 0)
+                }
+            }
+            None => Color::new(0, 0, 0),
+        })
+        .collect()
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
+    let result: Value =
+        serde_json::from_reader(BufReader::new(std::fs::File::open("assets/razerkbd.json")?))
+            .unwrap();
+
+    let leds: Vec<Option<_>> = result["leds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|led| {
+            if led.is_null() {
+                None
+            } else {
+                Some((
+                    led["x"].as_f64().unwrap() as f32,
+                    led["y"].as_f64().unwrap() as f32,
+                ))
+            }
+        })
+        .collect();
+
+    let client = OpenRGB::connect_to(("localhost", 6742)).await?;
+    let controller_id = 0;
+
     let device = cpal::default_host()
         .input_devices()?
         .find(|dev| {
@@ -108,20 +160,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     let channels = config.channels().into();
     let sample_rate = config.sample_rate().0 as f32;
 
-    // let binning = Binning::Linear(12);
-    let binning = Binning::Logarithmic(2);
-    // let binning = Binning::Ranges(vec![
-    //     0..50,
-    //     50..100,
-    //     100..1000,
-    //     1000..2000,
-    //     2000..6000,
-    //     6000..10000,
-    //     10000..14000,
-    //     14000..20000,
-    //     20000..24000,
-    // ]);
+    let window_size_millis: f32 = 50.0;
+    let window_size_samples = (window_size_millis / 1000.0 * sample_rate) as usize;
+    let window = Arc::new(Mutex::new(Vec::<f32>::with_capacity(window_size_samples)));
 
+    let window_cpal = window.clone();
     let stream = device.build_input_stream(
         &config.into(),
         move |data: &[f32], _: &cpal::InputCallbackInfo| {
@@ -129,14 +172,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .chunks(channels)
                 .map(|sample| average(sample))
                 .collect();
-            let num_samples = mono.len();
-            let fft = calculate_fft(&mono, num_samples);
-            let bins = binning.bin(&fft, sample_rate);
-
-            clearscreen::clear().expect("failed to clear screen");
-            for (range, magnitude) in bins.iter() {
-                println!("{:?}: {:.2}", range, magnitude);
-            }
+            let mut window = window_cpal.lock().unwrap();
+            window.extend(mono);
         },
         |err| eprintln!("Error: {err}"),
         None,
@@ -144,11 +181,27 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     stream.play()?;
 
+    let window_proc = window.clone();
+    tokio::spawn(async move {
+        loop {
+            if let Some(colors) = {
+                let mut window = window_proc.lock().unwrap();
+                if window.len() >= window_size_samples {
+                    let slice = &window[window.len() - window_size_samples..];
+                    let fft = calculate_fft(slice, window_size_samples);
+                    let bins = Binning::Linear(10).bin(&fft, sample_rate);
+                    window.clear();
+                    Some(paint(&leds, &bins, sample_rate))
+                } else {
+                    None
+                }
+            } {
+                client.update_leds(controller_id, colors).await.unwrap();
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(window_size_millis as u64)).await;
+        }
+    });
+
     std::thread::sleep(std::time::Duration::from_secs(600));
     Ok(())
 }
-
-// #[tokio::main]
-// use openrgb::{data::Color, OpenRGB};
-// let client = OpenRGB::connect_to(("blade", 6742)).await?;
-// client.update_led(0, 45, Color::new(255, 127, 0)).await?;

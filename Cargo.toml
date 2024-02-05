@@ -11,3 +11,9 @@ openrgb = { version = "0.1.2" }
 cpal = { version = "0.15.2" }
 rustfft = { version = "6.2.0" }
 clearscreen = { version = "2.0.1" }
+eframe = { version = "0.25.0" }
+egui_extras = { version = "*", features = ["all_loaders"] }
+image = { version = "0.24", features = ["jpeg", "png"] }
+rfd = { version = "0.13.0" }
+serde_json = { version = "1.0.113" }
+colorsys = { version = "0.6.7" }
