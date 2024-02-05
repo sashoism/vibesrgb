@@ -125,11 +125,11 @@ fn paint(
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let result: Value =
+    let led_config_json: Value =
         serde_json::from_reader(BufReader::new(std::fs::File::open("assets/razerkbd.json")?))
             .unwrap();
 
-    let leds: Vec<Option<_>> = result["leds"]
+    let leds: Vec<Option<_>> = led_config_json["leds"]
         .as_array()
         .unwrap()
         .iter()
